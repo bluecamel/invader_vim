@@ -38,6 +38,7 @@ class Overlay(QMainWindow):
             QtCore.Qt.FramelessWindowHint |
             QtCore.Qt.WindowTitleHint |
             QtCore.Qt.WindowStaysOnTopHint
+            # QtCore.Qt.X11BypassWindowManagerHint |
         )
         self.showMaximized()
         self.actions = actions

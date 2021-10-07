@@ -19,11 +19,6 @@ class ActionableObject:
         self.component = component
         self.role = object.getRole()
 
-        # if self.role == pyatspi.ROLE_TREE_ITEM:
-        #     parent_component = object.parent.getComponent()
-        #     self.position = parent_component.getPosition(0)
-        #     self.size = parent_component.getSize()
-        # else:
         self.position = component.getPosition(0)
         self.size = component.getSize()
 
@@ -47,8 +42,8 @@ class ActionObject(ActionableObject):
                 action_objects.append(ClickableObject(object, component, action, action_index))
             elif action_name == 'press':
                 action_objects.append(PressableObject(object, component, action, action_index))
-            elif click_ancestor and action_name == 'clickAncestor':
-                action_objects.append(ClickableObject(object, component, action, action_index))
+            elif action_name == 'clickAncestor' and click_ancestor:
+                action_objects.append(SelectableObject(object, component, action, action_index))
 
         return action_objects
 
@@ -64,14 +59,11 @@ class PressableObject(ActionObject):
     pass
 
 
-# TODO(bkd): this didn't work, so I'm using clickAncestor
-class SelectableObject(ActionableObject):
-    def __init__(self, object, component, selection):
-        ActionableObject.__init__(self, object, component)
-        self.selection = selection
-
-    def do_action(self):
-        self.selection.selectChild(self.object.getIndexInParent())
+class SelectableObject(ActionObject):
+    pass
+    # TODO(bkd): this didn't work, so I'm using clickAncestor
+    # def do_action(self):
+    #     self.selection.selectChild(self.object.getIndexInParent())
 
 
 class Window():
@@ -107,9 +99,7 @@ class Window():
                 action = tree.queryAction()
 
                 # TODO(bkd): this feels like a hack
-                click_ancestor = False
-                if set([pyatspi.STATE_SELECTABLE]).issubset(tree_states_set):
-                    click_ancestor = True
+                click_ancestor = [False, True][set([pyatspi.STATE_SELECTABLE]).issubset(tree_states_set)]
 
                 self.actionable_objects.extend(ActionObject.create(tree, component, action, click_ancestor))
             except NotImplementedError:
