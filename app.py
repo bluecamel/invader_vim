@@ -2,35 +2,42 @@ import sys
 import math
 from enum import Enum
 import typing
-
-from PyQt5 import QtCore
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QAction, QApplication, QLabel, QMainWindow, QMenu, QSystemTrayIcon, QWidget
 
-from atspi import get_active_window
+from atspi import ClickableObject, PressableObject, Registry, SelectableObject
 from keyboard import ALPHA_UPPER, DynamicHotKeyAndKeySequenceListener, KeySequence
+from logger import create_logger
 from overlay import Overlay, OverlayAction
 
 
 class Mode(Enum):
-    CLICKABLE = 0
-    PRESSABLES = 1
-    SELECTABLES = 2
+    PAUSED = 0
+    CLICKABLE = 1
+    PRESSABLES = 2
+    SELECTABLES = 3
 
 
-class GIR(QtCore.QObject):
-    _activate = QtCore.pyqtSignal(Mode, name='activate')
-    _quit = QtCore.pyqtSignal(name='quit')
+class GIR(QObject):
+    _activate = pyqtSignal(Mode, name='activate')
+    _quit = pyqtSignal(name='quit')
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, logger):
+        QObject.__init__(self)
+        self.active_window = None
+        self.logger = logger
+        self.logger.info('GIR initializing')
+        self.overlay = None
         self.init_hot_keys()
-        self._activate.connect(self.on_activate)
+        self.init_atspi_registry()
+        self.activate.connect(self.on_activate)
+        self.logger.info('GIR reporting for duty')
 
     def create_overlay(self, actionable_objects, key_sequence_keys):
         overlay_actions = self.create_overlay_actions(actionable_objects, key_sequence_keys)
         self.overlay = Overlay(overlay_actions)
-        self.hotkeys.key_sequence_activated.connect(self.on_destroy)
+        self.hotkeys.key_sequence_activated.connect(self.destroy_overlay)
 
     def create_overlay_actions(self, actionable_objects, key_sequence_keys):
         if len(actionable_objects) != len(key_sequence_keys):
@@ -67,41 +74,70 @@ class GIR(QtCore.QObject):
 
         return key_sequence_keys
 
+    def destroy_overlay(self, keep_active_window=False):
+        if not keep_active_window:
+            self.active_window = None
+
+        if self.overlay:
+            self.overlay.destroy()
+
+    def init_atspi_registry(self):
+        self.registry = Registry(self.logger)
+
     def init_hot_keys(self):
         self.hotkeys = DynamicHotKeyAndKeySequenceListener()
         self.hotkeys.add_hotkey('<ctrl>+<alt>+c', lambda: self.activate.emit(Mode.CLICKABLE))
         self.hotkeys.add_hotkey('<ctrl>+<alt>+p', lambda: self.activate.emit(Mode.PRESSABLES))
         self.hotkeys.add_hotkey('<ctrl>+<alt>+s', lambda: self.activate.emit(Mode.SELECTABLES))
-        self.hotkeys.add_hotkey('<ctrl>+<alt>+q', self.quit.emit)
+        self.hotkeys.add_hotkey('<ctrl>+<alt>+f', lambda: self.activate.emit(Mode.PAUSED))
+        self.hotkeys.add_hotkey('<ctrl>+<alt>+q', self.on_quit)
         self.hotkeys.start()
 
     def on_activate(self, mode):
+        self.logger.info({'message': 'activate', 'mode': mode})
+
+        self.destroy_overlay(keep_active_window=True)
         self.hotkeys.clear_key_sequences()
 
-        active_window = get_active_window()
-
-        actionable_objects = []
+        actionable_object_types = []
         if mode == Mode.CLICKABLE:
-            actionable_objects = active_window.clickable_objects()
+            actionable_object_types.append(ClickableObject)
         elif mode == Mode.PRESSABLES:
-            actionable_objects = active_window.pressable_objects()
+            actionable_object_types.append(PressableObject)
         elif mode == Mode.SELECTABLES:
-            actionable_objects = active_window.selectable_objects()
+            actionable_object_types.append(SelectableObject)
+        elif mode == Mode.PAUSED:
+            self.destroy_overlay()
+            return
+
+        if not self.active_window:
+            self.active_window = self.registry.active_window()
+
+        if not self.active_window:
+            self.logger.warning('Active window not found.')
+            return
+
+        actionable_objects = self.active_window.filter_actionable_objects(actionable_object_types)
 
         if not actionable_objects:
+            self.logger.warning('No actionable objects found in the active window.')
             return
+
+        self.logger.info({'message': 'Found actionable objects.', 'count': len(actionable_objects)})
 
         key_sequence_keys = self.create_key_sequences(actionable_objects)
         self.create_overlay(actionable_objects, key_sequence_keys)
 
-    def on_destroy(self):
-        self.overlay.destroy()
+    def on_quit(self):
+        self.destroy_overlay()
+        self.quit.emit()
 
 
 class InvaderVim(QApplication):
     def __init__(self, argv: typing.List[str]):
-        super().__init__(argv)
+        QApplication.__init__(self, argv)
         self.setQuitOnLastWindowClosed(False)
+        self.logger = create_logger()
         self.widget = QWidget()
         self.init()
     
@@ -118,7 +154,7 @@ class InvaderVim(QApplication):
         self.menu.addAction(quit)
 
     def init_gir(self):
-        self.GIR = GIR()
+        self.GIR = GIR(self.logger)
         self.GIR.quit.connect(self.quit)
 
     def init_tray(self):
